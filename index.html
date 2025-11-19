@@ -58,8 +58,8 @@
                 class="flex-1 w-full p-4 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none font-mono text-sm shadow-inner"
                 placeholder="Paste schedule here..."></textarea>
             <div class="mt-3 text-xs text-slate-500">
-                <p><i class="fa-solid fa-circle-info text-blue-400"></i> Supports English (Route 21) and Chinese (21号线).</p>
-                <p><i class="fa-solid fa-circle-info text-blue-400"></i> Handles formats like 'ID:Start-End' or 'Start-End(ID)'.</p>
+                <p><i class="fa-solid fa-circle-info text-blue-400"></i> Supports: Route 21, 21号线, R21, Rt21</p>
+                <p><i class="fa-solid fa-circle-info text-blue-400"></i> Filters out scan headers (e.g., R4:494)</p>
             </div>
         </div>
 
@@ -98,6 +98,7 @@
                 .replace(/（/g, '(').replace(/）/g, ')') // Chinese brackets
                 .replace(/：/g, ':') // Chinese colon
                 .replace(/(\d+)\s*号线/g, 'Route $1') // Normalize '34号线' to 'Route 34'
+                .replace(/\b(?:R|Rt)\s*(\d+)/gi, 'Route $1') // Normalize 'R4', 'Rt4' to 'Route 4'
                 .replace(/\*/g, ' ') // Remove asterisks used for formatting
                 .replace(/\[.*?\]/g, '') // Remove emoji placeholders like [月亮]
                 .replace(/⏰/g, ''); 
@@ -130,7 +131,6 @@
                 if (!routeNameMatch) return; 
 
                 // --- FIX: STOP PARSING AT FOOTER TEXT ---
-                // This prevents "Los siguientes conductores..." from being added to the last route.
                 const stopPattern = /(Los siguientes|descansarán|off duty|resting|conductores descansarán)/i;
                 const stopMatch = chunk.match(stopPattern);
                 if (stopMatch) {
