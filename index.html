@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dispatch Text Normalizer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #c1c1c1;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #a8a8a8;
+        }
+        .animate-fade-in {
+            animation: fadeIn 0.3s ease-in-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(5px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body class="bg-slate-100 text-slate-800 h-screen flex flex-col overflow-hidden">
+
+    <!-- Header -->
+    <header class="bg-blue-600 text-white p-4 shadow-md z-10 shrink-0">
+        <div class="container mx-auto flex justify-between items-center">
+            <h1 class="text-xl font-bold flex items-center gap-2">
+                <i class="fa-solid fa-truck-fast"></i> Dispatch Normalizer
+            </h1>
+            <div class="text-sm opacity-80 hidden md:block">
+                Converts messy dispatch text to System Format
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 flex flex-col md:flex-row overflow-hidden">
+        
+        <!-- Left Panel: Input -->
+        <div class="w-full md:w-1/3 p-4 flex flex-col border-r border-slate-200 bg-white z-0">
+            <div class="flex justify-between items-center mb-2">
+                <label class="font-semibold text-slate-600">Raw Dispatch Text</label>
+                <button onclick="clearInput()" class="text-xs text-red-500 hover:underline">Clear</button>
+            </div>
+            <textarea id="inputText" 
+                class="flex-1 w-full p-4 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none font-mono text-sm shadow-inner"
+                placeholder="Paste schedule here..."></textarea>
+            <div class="mt-3 text-xs text-slate-500">
+                <p><i class="fa-solid fa-circle-info text-blue-400"></i> Supports English (Route 21) and Chinese (21号线).</p>
+                <p><i class="fa-solid fa-circle-info text-blue-400"></i> Handles formats like 'ID:Start-End' or 'Start-End(ID)'.</p>
+            </div>
+        </div>
+
+        <!-- Right Panel: Output -->
+        <div class="w-full md:w-2/3 p-4 bg-slate-50 overflow-y-auto relative">
+            <div class="flex justify-between items-center mb-4 sticky top-0 bg-slate-50 py-2 z-10">
+                <h2 class="font-semibold text-slate-700">Parsed Routes</h2>
+                <span id="routeCount" class="text-xs font-mono bg-slate-200 px-2 py-1 rounded text-slate-600">0 Routes Found</span>
+            </div>
+
+            <div id="outputContainer" class="space-y-4 pb-10">
+                <!-- Dynamic Content Goes Here -->
+                <div class="text-center text-slate-400 mt-20">
+                    <i class="fa-regular fa-clipboard text-4xl mb-2"></i>
+                    <p>Paste text on the left to begin.</p>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="fixed bottom-5 right-5 transform translate-y-20 opacity-0 transition-all duration-300 bg-slate-800 text-white px-4 py-2 rounded shadow-lg flex items-center gap-2 z-50">
+        <i class="fa-solid fa-check text-green-400"></i>
+        <span id="toastMsg">Copied!</span>
+    </div>
+
+    <script>
+        const inputText = document.getElementById('inputText');
+        const outputContainer = document.getElementById('outputContainer');
+        const routeCountLabel = document.getElementById('routeCount');
+
+        // Standardizing separators and brackets
+        const cleanText = (text) => {
+            return text
+                .replace(/（/g, '(').replace(/）/g, ')') // Chinese brackets
+                .replace(/：/g, ':') // Chinese colon
+                .replace(/(\d+)\s*号线/g, 'Route $1') // Normalize '34号线' to 'Route 34'
+                .replace(/\*/g, ' ') // Remove asterisks used for formatting
+                .replace(/\[.*?\]/g, '') // Remove emoji placeholders like [月亮]
+                .replace(/⏰/g, ''); 
+        };
+
+        // Main Parsing Logic
+        const parseDispatch = () => {
+            const raw = inputText.value;
+            if (!raw.trim()) {
+                outputContainer.innerHTML = `
+                    <div class="text-center text-slate-400 mt-20">
+                        <i class="fa-regular fa-clipboard text-4xl mb-2"></i>
+                        <p>Paste text on the left to begin.</p>
+                    </div>`;
+                routeCountLabel.textContent = "0 Routes Found";
+                return;
+            }
+
+            const cleaned = cleanText(raw);
+            
+            // Split by "Route" keyword (case insensitive)
+            const chunks = cleaned.split(/(?=Route\s*[:\d])/i).filter(c => c.trim().length > 0);
+            
+            outputContainer.innerHTML = '';
+            let routeCount = 0;
+
+            chunks.forEach(chunk => {
+                // Identify Route Name
+                const routeNameMatch = chunk.match(/(Route\s*\d+)/i);
+                if (!routeNameMatch) return; 
+
+                // --- FIX: STOP PARSING AT FOOTER TEXT ---
+                // This prevents "Los siguientes conductores..." from being added to the last route.
+                const stopPattern = /(Los siguientes|descansarán|off duty|resting|conductores descansarán)/i;
+                const stopMatch = chunk.match(stopPattern);
+                if (stopMatch) {
+                    chunk = chunk.substring(0, stopMatch.index);
+                }
+
+                routeCount++;
+                const routeName = routeNameMatch[1];
+                
+                let segments = [];
+                
+                // Split chunk into parts (lines or commas)
+                const parts = chunk.replace(routeName, '').split(/[\n,]/).filter(p => p.trim());
+
+                // Context variable to handle lines like: "Driver (ID) 1-50, 60-100"
+                let currentDriverId = null;
+
+                parts.forEach(part => {
+                    part = part.trim();
+                    if(!part) return;
+
+                    // --- FIX: Ignore Main Scan ID headers ---
+                    // Added '扫货号' (Scan number) to ignore list
+                    if (part.match(/scan\s*id/i) || part.match(/main\s*scan/i) || part.match(/扫货号/)) return;
+
+                    // Find ID
+                    // Look for (digits), just digits 5+, or standard colon format ID:Range
+                    let idMatch = part.match(/\((\d{4,})\)/) || part.match(/(\d{5,})/);
+                    if (idMatch) {
+                        currentDriverId = idMatch[1] || idMatch[0];
+                    }
+                    
+                    // Find Range
+                    let rangeMatch = part.match(/(\d+)\s*-\s*(\d+|end)/i);
+
+                    if (rangeMatch && currentDriverId) {
+                        // Standard Case
+                        let start = parseInt(rangeMatch[1]);
+                        let endRaw = rangeMatch[2].toLowerCase();
+                        let end = (endRaw === 'end') ? 9999 : parseInt(endRaw);
+                        
+                        segments.push({ start, end, driverId: currentDriverId });
+                    }
+                    else if (idMatch && !rangeMatch) {
+                        // Edge Case: ID found, but NO range found.
+                        // Only assume full route if it's not part of some ignored text that slipped through.
+                        segments.push({ start: 1, end: 9999, driverId: currentDriverId, isAssumption: true });
+                    }
+                });
+
+                // Sort segments by start number
+                segments.sort((a, b) => a.start - b.start);
+
+                // Generate formatted string
+                const formattedString = segments.map(s => `${s.start}-${s.end}(${s.driverId})`).join(',');
+
+                // Validate
+                const validation = validateRoute(segments);
+
+                // Render Card
+                renderRouteCard(routeName, formattedString, validation, chunk);
+            });
+
+            routeCountLabel.textContent = `${routeCount} Routes Found`;
+        };
+
+        // Validation Logic
+        const validateRoute = (segments) => {
+            let warnings = [];
+            if (segments.length === 0) return { status: 'empty', warnings: ['No dispatch data found'] };
+
+            // Check Start
+            if (segments[0].start !== 1) {
+                warnings.push(`Starts at ${segments[0].start} instead of 1`);
+            }
+
+            // Check Continuity
+            for (let i = 0; i < segments.length - 1; i++) {
+                const current = segments[i];
+                const next = segments[i+1];
+
+                if (next.start > current.end + 1) {
+                    warnings.push(`Gap detected: ${current.end} to ${next.start}`);
+                }
+                if (next.start <= current.end) {
+                    // Ignore self-overlap if it's the exact same segment
+                    if (current.start === next.start && current.end === next.end && current.driverId === next.driverId) continue;
+                    warnings.push(`Overlap detected: ${current.end} overlaps with ${next.start}`);
+                }
+            }
+            
+            if (warnings.length > 0) return { status: 'warning', warnings };
+            return { status: 'ok', warnings: [] };
+        };
+
+        // Render Logic
+        const renderRouteCard = (title, resultString, validation, originalText) => {
+            const card = document.createElement('div');
+            card.className = "bg-white p-4 rounded-lg shadow-sm border border-slate-200 animate-fade-in hover:shadow-md transition-shadow";
+            
+            let statusIcon = '<i class="fa-solid fa-check-circle text-green-500"></i>';
+            let statusBorder = 'border-l-4 border-l-green-500';
+            let warningHtml = '';
+
+            if (validation.status === 'warning') {
+                statusIcon = '<i class="fa-solid fa-triangle-exclamation text-amber-500"></i>';
+                statusBorder = 'border-l-4 border-l-amber-500';
+                warningHtml = `
+                    <div class="mt-2 bg-amber-50 text-amber-700 text-xs p-2 rounded border border-amber-100">
+                        <strong>Warning:</strong>
+                        <ul class="list-disc list-inside">
+                            ${validation.warnings.map(w => `<li>${w}</li>`).join('')}
+                        </ul>
+                    </div>
+                `;
+            } else if (validation.status === 'empty') {
+                statusIcon = '<i class="fa-solid fa-circle-question text-slate-400"></i>';
+                statusBorder = 'border-l-4 border-l-slate-300';
+                resultString = "Could not parse segments";
+            }
+
+            card.innerHTML = `
+                <div class="${statusBorder} pl-3">
+                    <div class="flex justify-between items-start mb-2">
+                        <h3 class="font-bold text-lg text-slate-700">${title} ${statusIcon}</h3>
+                        <button onclick="copyToClipboard(this, '${resultString}')" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm flex items-center gap-2 transition-colors">
+                            <i class="fa-regular fa-copy"></i> Copy
+                        </button>
+                    </div>
+                    
+                    <!-- Result Field -->
+                    <div class="relative group">
+                        <input type="text" readonly value="${resultString}" 
+                            class="w-full bg-slate-50 border border-slate-300 text-slate-700 text-sm rounded p-2 font-mono focus:outline-none focus:ring-1 focus:ring-blue-400">
+                    </div>
+
+                    ${warningHtml}
+                    
+                    <!-- Original Text Toggle -->
+                    <details class="mt-2">
+                        <summary class="text-xs text-slate-400 cursor-pointer hover:text-slate-600 select-none">View Original Source</summary>
+                        <pre class="text-xs text-slate-500 mt-1 bg-slate-100 p-2 rounded overflow-x-auto whitespace-pre-wrap break-words">${originalText.trim()}</pre>
+                    </details>
+                </div>
+            `;
+            outputContainer.appendChild(card);
+        };
+
+        // Utilities
+        const copyToClipboard = (btn, text) => {
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            document.body.appendChild(textarea);
+            textarea.select();
+            try {
+                document.execCommand('copy');
+                showToast("Copied to clipboard!");
+            } catch (err) {
+                navigator.clipboard.writeText(text).then(() => {
+                    showToast("Copied to clipboard!");
+                });
+            }
+            document.body.removeChild(textarea);
+
+            const originalHTML = btn.innerHTML;
+            btn.innerHTML = `<i class="fa-solid fa-check"></i> Copied`;
+            btn.classList.add('bg-green-600', 'hover:bg-green-700');
+            btn.classList.remove('bg-blue-600', 'hover:bg-blue-700');
+            
+            setTimeout(() => {
+                btn.innerHTML = originalHTML;
+                btn.classList.remove('bg-green-600', 'hover:bg-green-700');
+                btn.classList.add('bg-blue-600', 'hover:bg-blue-700');
+            }, 2000);
+        };
+
+        const showToast = (msg) => {
+            const toast = document.getElementById('toast');
+            const toastMsg = document.getElementById('toastMsg');
+            toastMsg.innerText = msg;
+            toast.classList.remove('translate-y-20', 'opacity-0');
+            setTimeout(() => {
+                toast.classList.add('translate-y-20', 'opacity-0');
+            }, 3000);
+        };
+
+        const clearInput = () => {
+            inputText.value = '';
+            parseDispatch(); 
+            inputText.focus();
+        };
+
+        let timeout = null;
+        inputText.addEventListener('input', () => {
+            clearTimeout(timeout);
+            timeout = setTimeout(parseDispatch, 300); 
+        });
+
+        parseDispatch();
+
+    </script>
+</body>
+</html>
